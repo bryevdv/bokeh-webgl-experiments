@@ -1,3 +1,6 @@
+// 2x canvas for auto smoothing?
+// matrix transform for scale transforms
+
 import * as Regl from "regl"
 
 const WHITE: [number, number, number, number] = [ 1, 1, 1, 1 ]
@@ -13,17 +16,18 @@ const regl = Regl({
   attributes: {antialias: true}},
 )
 
-const N = 100000
+const N = 100
 
 // Simulate a Bokeh ColumnDataSource
 const source = {
   data: {
     x: Float32Array.from(Array(N).fill(0).map((_, i) =>  {return -1 + 2 * Math.random() + 1./N})),
     y: Float32Array.from(Array(N).fill(0).map((_, i) =>  {return -1 + 2 * Math.random() + 1./N})),
-    size: Float32Array.from(Array(N).fill(0).map((_, i) => { return Math.random() * 3.05 + 3.02 })),
+    size: Float32Array.from(Array(N).fill(0).map((_, i) => { return Math.random() * 51.05 + 31.02 })),
     angle: Float32Array.from(Array(N).fill(0).map((_, i) => { return Math.random() * 2*Math.PI })),
     fill_color: Array(N).fill(0).map((_, i) => { return [Math.random(), Math.random(), 0.5] }),
     line_color: Array(N).fill(0).map((_, i) => { return [0.8, Math.random(), Math.random()] }),
+    line_width: Array(N).fill(0).map((_, i) => { return Math.random()*5 + 1}),
   }
 }
 
@@ -34,14 +38,15 @@ const glyph = {
   // y: {value: 0},
   size: {field: "size"},
   // size: {value: 30},
-  angle: {value: 0},
+  angle: {value: 1.7},
   //angle: {field: "angle"},
   fill_color: {field: "fill_color"},
   fill_alpha: {value: 0.3},
-  //line_color: {value: [1.0, 0.0, 0.0]},
-  line_color: {field: "line_color"},
+  line_color: {value: [0.0, 0.0, 0.0]},
+  // line_color: {field: "line_color"},
   line_alpha: {value: 1.0},
-  line_width: {value: 2.0},
+  line_width: {value: 3.0},
+  //line_width: {field: "line_width"},
 }
 
 function declare_attribute(name: string): string {
@@ -115,11 +120,7 @@ abstract class MarkerProgram {
     this.source = source
   }
 
-  abstract main(): string
-
-  abstract get count(): number
-  abstract get position(): number[][]
-  abstract get primitive(): string
+  abstract distance(): string
 
   vert_shader(marker: any): string {
     return `
@@ -128,6 +129,7 @@ abstract class MarkerProgram {
 
     ${declarations(marker)}
 
+    varying float v_angle;
     varying float v_size;
     varying vec3 v_fill_color;
     varying float v_fill_alpha;
@@ -137,12 +139,9 @@ abstract class MarkerProgram {
 
     void main() {
       gl_PointSize = size;
-      // gl_Position = vec4(position.x * size + x, position.y * size + y, 0, 1);
-      gl_Position = vec4(
-         cos(angle) * position.x * size + sin(angle) * position.y * size + x,
-        -sin(angle) * position.x * size + cos(angle) * position.y * size + y,
-        0, 1);
+      gl_Position = vec4(position.x * size + x, position.y * size + y, 0, 1);
       v_size = size;
+      v_angle = angle;
       v_fill_color = fill_color;
       v_fill_alpha = fill_alpha;
       v_line_color = line_color;
@@ -160,15 +159,12 @@ abstract class MarkerProgram {
     const float PI = 3.14159265358979323846264;
 
     varying float v_size;
+    varying float v_angle;
     varying vec3 v_fill_color;
     varying float v_fill_alpha;
     varying vec3 v_line_color;
     varying float v_line_alpha;
     varying float v_line_width;
-
-    float smoothStep(float x, float y) {
-      return 1.0 / (1.0 + exp(50.0*(x - y)));
-    }
 
     vec4 outline(float distance, float antialias, vec4 fill_color, vec4 line_color, float line_width) {
       vec4 frag_color;
@@ -196,7 +192,7 @@ abstract class MarkerProgram {
           if (abs(signed_distance) < (line_width/2.0 + antialias) ) {
               frag_color = vec4(line_color.rgb, line_color.a * alpha);
           } else {
-              discard;
+            frag_color = vec4(line_color.rgb, 0.0);
           }
       }
 
@@ -204,6 +200,28 @@ abstract class MarkerProgram {
     }
 
     ${this.main()}
+    `
+  }
+
+  main(): string {
+    return `
+    void main () {
+      vec4 fill_color = vec4(v_fill_color, v_fill_alpha);
+      vec4 line_color = vec4(v_line_color, v_line_alpha);
+
+      vec2 P = 2.0 * gl_PointCoord - 1.0;
+      P = vec2(
+         cos(v_angle) * P.x + sin(v_angle) * P.y,
+        -sin(v_angle) * P.x + cos(v_angle) * P.y
+      );
+
+      float point_size = v_size + 2.0 * (v_line_width + 1.5);
+      P *= point_size;
+
+      ${this.distance()}
+
+      gl_FragColor = outline(distance, 0.8, fill_color, line_color, v_line_width);
+    }
     `
   }
 
@@ -229,32 +247,6 @@ abstract class MarkerProgram {
     })
   }
 
-}
-
-class CircleProgram extends MarkerProgram {
-  main(): string {
-    return `
-    void main () {
-      #extension GL_OES_standard_derivatives : enable
-      float r = 0.0, delta = 0.0, alpha = 1.0;
-      vec2 cxy = 2.0 * gl_PointCoord - 1.0;
-      r = dot(cxy, cxy);
-      delta = fwidth(r);
-      alpha = 1.0 - smoothstep(1.0 - delta, 1.0 + delta, r);
-
-      vec4 fill_color = vec4(v_fill_color, alpha*v_fill_alpha);
-      vec4 line_color = vec4(v_line_color, alpha*v_fill_alpha);
-
-      vec2 P = cxy;
-      float point_size = v_size; // + 2.0 * (v_line_width + 1.5*0.8);
-      float distance = length(P*point_size) - v_size/2.0;
-
-      vec4 frag_color = outline(distance, 0.8, fill_color, line_color, v_line_width);
-      gl_FragColor = outline(distance, 0.8, fill_color, line_color, v_line_width);
-    }
-    `
-  }
-
   get position(): number[][] {
     return [[0.0, 0.0]]
   }
@@ -269,31 +261,44 @@ class CircleProgram extends MarkerProgram {
 
 }
 
-class RectProgram extends MarkerProgram {
-  main(): string {
-    return `
-    void main () {
-      #extension GL_OES_standard_derivatives : enable
-      gl_FragColor = vec4(v_fill_color, v_fill_alpha);
-    }
-    `
+class CircleProgram extends MarkerProgram {
+  distance(): string {
+    return `float distance = length(P) - v_size/2.0;`
   }
-
-  get position(): number[][] {
-    return [[1, 1], [-1, 1], [1, -1], [-1, -1]]
-  }
-
-  get primitive(): string {
-    return "triangle strip"
-  }
-
-  get count(): number {
-    return 4
-  }
-
 }
 
-const program = new CircleProgram(glyph, source)
+class SquareProgram extends MarkerProgram {
+  distance(): string {
+    return `float distance = max(abs(P.x), abs(P.y)) - v_size/2.0;`
+  }
+}
+
+class DiamondProgram extends MarkerProgram {
+  distance(): string {
+    return `
+    float x = SQRT_2 / 2.0 * (P.x * 1.5 - P.y);
+    float y = SQRT_2 / 2.0 * (P.x * 1.5 + P.y);
+    float r1 = max(abs(x), abs(y)) - v_size / (2.0 * SQRT_2);
+    float distance = r1 / SQRT_2;
+    `
+  }
+}
+
+class TriangleProgram extends MarkerProgram {
+  distance(): string {
+    return `
+    P.y -= v_size * 0.3;
+    float x = SQRT_2 / 2.0 * (P.x * 1.7 - P.y);
+    float y = SQRT_2 / 2.0 * (P.x * 1.7 + P.y);
+    float r1 = max(abs(x), abs(y)) - v_size / 1.6;
+    float r2 = P.y;
+    float distance = max(r1 / SQRT_2, r2);  // Intersect diamond with rectangle
+    `
+  }
+}
+
+
+const program = new DiamondProgram(glyph, source)
 
 const command = program.generate()
 
