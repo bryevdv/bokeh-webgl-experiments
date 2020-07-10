@@ -13,15 +13,17 @@ const regl = Regl({
   attributes: {antialias: true}},
 )
 
-const N = 1000
+const N = 100000
 
 // Simulate a Bokeh ColumnDataSource
 const source = {
   data: {
     x: Float32Array.from(Array(N).fill(0).map((_, i) =>  {return -1 + 2 * Math.random() + 1./N})),
     y: Float32Array.from(Array(N).fill(0).map((_, i) =>  {return -1 + 2 * Math.random() + 1./N})),
-    size: Float32Array.from(Array(N).fill(0).map((_, i) => { return Math.random() * 55 + 20 })),
+    size: Float32Array.from(Array(N).fill(0).map((_, i) => { return Math.random() * 3.05 + 3.02 })),
+    angle: Float32Array.from(Array(N).fill(0).map((_, i) => { return Math.random() * 2*Math.PI })),
     fill_color: Array(N).fill(0).map((_, i) => { return [Math.random(), Math.random(), 0.5] }),
+    line_color: Array(N).fill(0).map((_, i) => { return [0.8, Math.random(), Math.random()] }),
   }
 }
 
@@ -33,8 +35,13 @@ const glyph = {
   size: {field: "size"},
   // size: {value: 30},
   angle: {value: 0},
+  //angle: {field: "angle"},
   fill_color: {field: "fill_color"},
   fill_alpha: {value: 0.3},
+  //line_color: {value: [1.0, 0.0, 0.0]},
+  line_color: {field: "line_color"},
+  line_alpha: {value: 1.0},
+  line_width: {value: 2.0},
 }
 
 function declare_attribute(name: string): string {
@@ -62,11 +69,14 @@ function declarations(marker: any): string {
   ${declare("angle", marker)}
   ${declare("fill_color", marker)}
   ${declare("fill_alpha", marker)}
+  ${declare("line_color", marker)}
+  ${declare("line_alpha", marker)}
+  ${declare("line_width", marker)}
   `
 }
 
 const MARKER_PROPERTIES: string[] = [
-  "x", "y", "size", "angle", "fill_color", "fill_alpha"
+  "x", "y", "size", "angle", "fill_color", "fill_alpha", "line_color", "line_alpha", "line_width"
 ]
 
 function make_uniforms(marker: any, source: any): any {
@@ -118,14 +128,26 @@ abstract class MarkerProgram {
 
     ${declarations(marker)}
 
+    varying float v_size;
     varying vec3 v_fill_color;
     varying float v_fill_alpha;
+    varying vec3 v_line_color;
+    varying float v_line_alpha;
+    varying float v_line_width;
 
     void main() {
       gl_PointSize = size;
-      gl_Position = vec4(position.x + x, position.y + y, 0, 1);
+      // gl_Position = vec4(position.x * size + x, position.y * size + y, 0, 1);
+      gl_Position = vec4(
+         cos(angle) * position.x * size + sin(angle) * position.y * size + x,
+        -sin(angle) * position.x * size + cos(angle) * position.y * size + y,
+        0, 1);
+      v_size = size;
       v_fill_color = fill_color;
       v_fill_alpha = fill_alpha;
+      v_line_color = line_color;
+      v_line_alpha = line_alpha;
+      v_line_width = line_width;
     }
     `
   }
@@ -134,17 +156,61 @@ abstract class MarkerProgram {
     return `
     precision mediump float;
 
+    const float SQRT_2 = 1.4142135623730951;
+    const float PI = 3.14159265358979323846264;
+
+    varying float v_size;
+    varying vec3 v_fill_color;
+    varying float v_fill_alpha;
+    varying vec3 v_line_color;
+    varying float v_line_alpha;
+    varying float v_line_width;
+
     float smoothStep(float x, float y) {
       return 1.0 / (1.0 + exp(50.0*(x - y)));
     }
 
-    varying vec3 v_fill_color;
-    varying float v_fill_alpha;
+    vec4 outline(float distance, float antialias, vec4 fill_color, vec4 line_color, float line_width) {
+      vec4 frag_color;
+
+      float t = line_width/2.0 - antialias;
+      float signed_distance = distance;
+      float border_distance = abs(signed_distance) - t;
+      float alpha = border_distance/antialias;
+      alpha = exp(-alpha*alpha);
+
+      // If line alpha is zero, it means no outline. To avoid a dark outline shining
+      // through due to AA, we set the line color to the fill color and avoid branching.
+      float select = float(bool(line_color.a));
+      line_color.rgb = select * line_color.rgb + (1.0  - select) * fill_color.rgb;
+
+      // Similarly, if we want a transparent fill
+      select = float(bool(fill_color.a));
+      fill_color.rgb = select * fill_color.rgb + (1.0  - select) * line_color.rgb;
+
+      if (border_distance < 0.0)
+          frag_color = line_color;
+      else if (signed_distance < 0.0) {
+          frag_color = mix(fill_color, line_color, sqrt(alpha));
+      } else {
+          if (abs(signed_distance) < (line_width/2.0 + antialias) ) {
+              frag_color = vec4(line_color.rgb, line_color.a * alpha);
+          } else {
+              discard;
+          }
+      }
+
+      return frag_color;
+    }
+
     ${this.main()}
     `
   }
 
   public generate(): Regl.DrawCommand {
+    console.log(this.vert_shader(this.marker))
+    console.log(this.frag_shader(this.marker))
+    console.log(make_uniforms(this.marker, this.source))
     return regl({
       frag: this.frag_shader(this.marker),
       vert: this.vert_shader(this.marker),
@@ -175,7 +241,16 @@ class CircleProgram extends MarkerProgram {
       r = dot(cxy, cxy);
       delta = fwidth(r);
       alpha = 1.0 - smoothstep(1.0 - delta, 1.0 + delta, r);
-      gl_FragColor = vec4(v_fill_color, alpha*v_fill_alpha);
+
+      vec4 fill_color = vec4(v_fill_color, alpha*v_fill_alpha);
+      vec4 line_color = vec4(v_line_color, alpha*v_fill_alpha);
+
+      vec2 P = cxy;
+      float point_size = v_size; // + 2.0 * (v_line_width + 1.5*0.8);
+      float distance = length(P*point_size) - v_size/2.0;
+
+      vec4 frag_color = outline(distance, 0.8, fill_color, line_color, v_line_width);
+      gl_FragColor = outline(distance, 0.8, fill_color, line_color, v_line_width);
     }
     `
   }
@@ -194,13 +269,38 @@ class CircleProgram extends MarkerProgram {
 
 }
 
+class RectProgram extends MarkerProgram {
+  main(): string {
+    return `
+    void main () {
+      #extension GL_OES_standard_derivatives : enable
+      gl_FragColor = vec4(v_fill_color, v_fill_alpha);
+    }
+    `
+  }
+
+  get position(): number[][] {
+    return [[1, 1], [-1, 1], [1, -1], [-1, -1]]
+  }
+
+  get primitive(): string {
+    return "triangle strip"
+  }
+
+  get count(): number {
+    return 4
+  }
+
+}
+
 const program = new CircleProgram(glyph, source)
 
 const command = program.generate()
 
-function update(context) {
+function update() {
   regl.clear({ color: WHITE })
   command(canvas)
 }
 
-regl.frame(update)
+update()
+//regl.frame(update)
