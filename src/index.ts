@@ -53,40 +53,73 @@ const glyph = {
   //line_width: {field: "line_width"},
 }
 
+
 function declare_attribute(name: string): string {
   const typ = name.match("color") ? "vec3" : "float"
-  return `attribute ${typ} ${name};`
+  return `attribute ${typ} a_${name};`
 }
 
 function declare_uniform(name: string): string {
   const typ = name.match("color") ? "vec3" : "float"
-  return `uniform ${typ} ${name};`
+  return `uniform ${typ} u_${name};`
 }
 
-function declare(name: string, marker: any): string {
-  if (marker[name].value !== undefined)
-    return declare_uniform(name)
-  else
-    return declare_attribute(name)
-}
-
-function declarations(marker: any): string {
-  return `
-  ${declare("x", marker)}
-  ${declare("y", marker)}
-  ${declare("size", marker)}
-  ${declare("angle", marker)}
-  ${declare("fill_color", marker)}
-  ${declare("fill_alpha", marker)}
-  ${declare("line_color", marker)}
-  ${declare("line_alpha", marker)}
-  ${declare("line_width", marker)}
-  `
+function declare_varying(name: string): string {
+  const typ = name.match("color") ? "vec3" : "float"
+  return `varying ${typ} v_${name};`
 }
 
 const MARKER_PROPERTIES: string[] = [
   "x", "y", "size", "angle", "fill_color", "fill_alpha", "line_color", "line_alpha", "line_width"
 ]
+
+function attr_declarations(marker: any): string {
+  let result = ""
+  for (let prop of MARKER_PROPERTIES) {
+    if (marker[prop].field !== undefined) {
+      result += `${declare_attribute(prop)}\n`
+    }
+  }
+  return result
+}
+
+function uniform_declarations(marker: any): string {
+  let result = ""
+  for (let prop of MARKER_PROPERTIES) {
+    if (marker[prop].value !== undefined) {
+      result += `${declare_uniform(prop)}\n`
+    }
+  }
+  return result
+}
+
+function varying_declarations(marker: any): string {
+  let result = ""
+  for (let prop of MARKER_PROPERTIES) {
+    result += `${declare_varying(prop)}\n`
+  }
+  return result
+}
+
+function varying_assignments(marker: any): string {
+  let result = ""
+  for (let prop of MARKER_PROPERTIES) {
+    if (marker[prop].field !== undefined) {
+      result += `v_${prop} = a_${prop};\n`
+    }
+    else {
+      result += `v_${prop} = u_${prop};\n`
+    }
+  }
+  return result
+}
+
+function vn(marker: any, prop: string): string {
+  if (marker[prop].field !== undefined) {
+      return `a_${prop}`
+    }
+  return `u_${prop}`
+}
 
 function make_uniforms(marker: any, source: any): any {
   const result = {
@@ -95,7 +128,7 @@ function make_uniforms(marker: any, source: any): any {
   }
   for (let prop of MARKER_PROPERTIES) {
     if (marker[prop].value !== undefined)
-      result[prop] = marker[prop].value
+      result["u_" + prop] = marker[prop].value
   }
   return result
 }
@@ -106,7 +139,7 @@ function make_attributes(marker: any, source: any, position: number[][]): any {
     if (marker[prop].field !== undefined) {
       const data = source.data[marker[prop].field]
       const buffer =  regl.buffer({data: data, usage: "dynamic"})
-      result[prop] = {buffer: buffer, divisor: 1}
+      result["a_" + prop] = {buffer: buffer, divisor: 1}
     }
   }
   return result
@@ -131,26 +164,15 @@ abstract class MarkerProgram {
     precision mediump float;
     attribute vec2 position;
 
-    ${declarations(marker)}
-
-    varying float v_angle;
-    varying float v_size;
-    varying vec3 v_fill_color;
-    varying float v_fill_alpha;
-    varying vec3 v_line_color;
-    varying float v_line_alpha;
-    varying float v_line_width;
+    ${attr_declarations(marker)}
+    ${uniform_declarations(marker)}
+    ${varying_declarations(marker)}
 
     void main() {
-      gl_PointSize = size;
-      gl_Position = vec4(position.x * size + x, position.y * size + y, 0, 1);
-      v_size = size;
-      v_angle = angle;
-      v_fill_color = fill_color;
-      v_fill_alpha = fill_alpha;
-      v_line_color = line_color;
-      v_line_alpha = line_alpha;
-      v_line_width = line_width;
+      gl_PointSize = ${vn(marker, "size")};
+      gl_Position = vec4(position.x + ${vn(marker, "x")}, position.y + ${vn(marker, "y")}, 0, 1);
+
+      ${varying_assignments(marker)}
     }
     `
   }
@@ -162,13 +184,8 @@ abstract class MarkerProgram {
     const float SQRT_2 = 1.4142135623730951;
     const float PI = 3.14159265358979323846264;
 
-    varying float v_size;
-    varying float v_angle;
-    varying vec3 v_fill_color;
-    varying float v_fill_alpha;
-    varying vec3 v_line_color;
-    varying float v_line_alpha;
-    varying float v_line_width;
+    ${uniform_declarations(marker)}
+    ${varying_declarations(marker)}
 
     vec4 outline(float distance, float antialias, vec4 fill_color, vec4 line_color, float line_width) {
       vec4 frag_color;
@@ -232,15 +249,14 @@ abstract class MarkerProgram {
   public generate(): Regl.DrawCommand {
     console.log(this.vert_shader(this.marker))
     console.log(this.frag_shader(this.marker))
-    console.log(make_uniforms(this.marker, this.source))
     return regl({
       frag: this.frag_shader(this.marker),
       vert: this.vert_shader(this.marker),
-      attributes: make_attributes(this.marker, this.source, this.position),
+      attributes: make_attributes(this.marker, this.source, [[0.0, 0.0]]),
       uniforms: make_uniforms(this.marker, this.source),
-      count: this.count,
+      count: 1,
       instances: N,
-      primitive: this.primitive as any,  // type?
+      primitive: "points",
       depth: { enable: false },
       blend: {
         enable: true,
@@ -249,18 +265,6 @@ abstract class MarkerProgram {
         color: [0, 0, 0, 0]
       },
     })
-  }
-
-  get position(): number[][] {
-    return [[0.0, 0.0]]
-  }
-
-  get primitive(): string {
-    return "points"
-  }
-
-  get count(): number {
-    return 1
   }
 
 }
@@ -291,7 +295,7 @@ class DiamondProgram extends MarkerProgram {
 class TriangleProgram extends MarkerProgram {
   distance(): string {
     return `
-    P.y -= v_size * 0.3;
+    P.y -= size * 0.3;
     float x = SQRT_2 / 2.0 * (P.x * 1.7 - P.y);
     float y = SQRT_2 / 2.0 * (P.x * 1.7 + P.y);
     float r1 = max(abs(x), abs(y)) - v_size / 1.6;
@@ -312,7 +316,7 @@ class XProgram extends MarkerProgram {
 }
 
 
-const program = new XProgram(glyph, source)
+const program = new CircleProgram(glyph, source)
 
 const command = program.generate()
 
