@@ -4,10 +4,14 @@
 import * as Regl from "regl"
 
 const WHITE: [number, number, number, number] = [ 1, 1, 1, 1 ]
-
+const devicePixelRatio = window.devicePixelRatio || 1;
 const canvas = document.createElement('canvas');
-canvas.width = 1200
-canvas.height = 800
+canvas.width = 1200 * devicePixelRatio;
+canvas.height = 800 * devicePixelRatio;
+
+canvas.style.width = (canvas.width / devicePixelRatio) + 'px';
+canvas.style.height = (canvas.height / devicePixelRatio) + 'px';
+
 document.body.appendChild(canvas);
 
 const regl = Regl({
@@ -16,14 +20,14 @@ const regl = Regl({
   attributes: {antialias: true}},
 )
 
-const N = 100
+const N = 1000
 
 // Simulate a Bokeh ColumnDataSource
 const source = {
   data: {
     x: Float32Array.from(Array(N).fill(0).map((_, i) =>  {return -1 + 2 * Math.random() + 1./N})),
     y: Float32Array.from(Array(N).fill(0).map((_, i) =>  {return -1 + 2 * Math.random() + 1./N})),
-    size: Float32Array.from(Array(N).fill(0).map((_, i) => { return Math.random() * 51.05 + 31.02 })),
+    size: Float32Array.from(Array(N).fill(0).map((_, i) => { return Math.random() * 51.05 + 61.02 })),
     angle: Float32Array.from(Array(N).fill(0).map((_, i) => { return Math.random() * 2*Math.PI })),
     fill_color: Array(N).fill(0).map((_, i) => { return [Math.random(), Math.random(), 0.5] }),
     line_color: Array(N).fill(0).map((_, i) => { return [0.8, Math.random(), Math.random()] }),
@@ -38,14 +42,14 @@ const glyph = {
   // y: {value: 0},
   size: {field: "size"},
   // size: {value: 30},
-  angle: {value: 1.7},
+  angle: {value: 0},
   //angle: {field: "angle"},
   fill_color: {field: "fill_color"},
   fill_alpha: {value: 0.3},
-  line_color: {value: [0.0, 0.0, 0.0]},
-  // line_color: {field: "line_color"},
+  //line_color: {value: [0.0, 0.0, 0.0]},
+  line_color: {field: "fill_color"},
   line_alpha: {value: 1.0},
-  line_width: {value: 3.0},
+  line_width: {value: 16.0},
   //line_width: {field: "line_width"},
 }
 
@@ -297,8 +301,18 @@ class TriangleProgram extends MarkerProgram {
   }
 }
 
+class XProgram extends MarkerProgram {
+  distance(): string {
+    return `
+    float circle = length(P) - v_size / 1.6;
+    float X = min(abs(P.x - P.y), abs(P.x + P.y)) - v_size / 100.0;  // bit of "width" for aa
+    float distance = max(circle, X);
+    `
+  }
+}
 
-const program = new DiamondProgram(glyph, source)
+
+const program = new XProgram(glyph, source)
 
 const command = program.generate()
 
