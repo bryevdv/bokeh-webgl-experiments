@@ -20,14 +20,14 @@ const regl = Regl({
   attributes: {antialias: true}},
 )
 
-const N = 1000
+const N = 2000
 
 // Simulate a Bokeh ColumnDataSource
 const source = {
   data: {
     x: Float32Array.from(Array(N).fill(0).map((_, i) =>  {return -1 + 2 * Math.random() + 1./N})),
     y: Float32Array.from(Array(N).fill(0).map((_, i) =>  {return -1 + 2 * Math.random() + 1./N})),
-    size: Float32Array.from(Array(N).fill(0).map((_, i) => { return Math.random() * 51.05 + 61.02 })),
+    size: Float32Array.from(Array(N).fill(0).map((_, i) => { return Math.random() * 41.05 + 41.02 })),
     angle: Float32Array.from(Array(N).fill(0).map((_, i) => { return Math.random() * 2*Math.PI })),
     fill_color: Array(N).fill(0).map((_, i) => { return [Math.random(), Math.random(), 0.5] }),
     line_color: Array(N).fill(0).map((_, i) => { return [0.8, Math.random(), Math.random()] }),
@@ -46,7 +46,7 @@ const glyph = {
   // angle: {field: "angle"},
   fill_color: {field: "fill_color"},
   fill_alpha: {value: 0.3},
-  //line_color: {value: [0.0, 0.0, 0.0]},
+  //line_color: {value: [0.0, 0.3, 0.4]},
   line_color: {field: "fill_color"},
   line_alpha: {value: 1.0},
   line_width: {value: 6.0},
@@ -282,6 +282,27 @@ class CircleProgram extends MarkerProgram {
   }
 }
 
+class DotProgram extends MarkerProgram {
+  distance(): string {
+    return distance(`
+  float v = length(P) - size/8.0;
+  return max(-step(0.0, v), v);
+  `)
+  }
+}
+
+class CircleDotProgram extends MarkerProgram {
+  distance(): string {
+    return distance(`
+  float circle = length(P) - size/2.0;
+  float v = length(P) - size/8.0;
+  float dot = max(-step(0.0, v), v);
+  return circle * step(0.0, v);
+  `)
+  }
+}
+
+
 class SquareProgram extends MarkerProgram {
   distance(): string {
     return distance(`
@@ -289,6 +310,18 @@ class SquareProgram extends MarkerProgram {
     `)
   }
 }
+
+class SquareDotProgram extends MarkerProgram {
+  distance(): string {
+    return distance(`
+  float square = max(abs(P.x), abs(P.y)) - v_size/2.0;
+  float v = length(P) - size/8.0;
+  float dot = max(-step(0.0, v), v);
+  return square * step(0.0, v);
+    `)
+  }
+}
+
 
 class DiamondProgram extends MarkerProgram {
   distance(): string {
@@ -301,15 +334,47 @@ class DiamondProgram extends MarkerProgram {
   }
 }
 
+class DiamondDotProgram extends MarkerProgram {
+  distance(): string {
+    return distance(`
+  float x = SQRT_2 / 2.0 * (P.x * 1.5 - P.y);
+  float y = SQRT_2 / 2.0 * (P.x * 1.5 + P.y);
+  float r1 = max(abs(x), abs(y)) - v_size / (2.0 * SQRT_2);
+  float diamond = r1 / SQRT_2;
+  float v = length(P) - size/8.0;
+  float dot = max(-step(0.0, v), v);
+  return diamond * step(0.0, v);
+  `)
+  }
+}
+
 class TriangleProgram extends MarkerProgram {
   distance(): string {
     return distance(`
-    P.y -= size * 0.3;
-    float x = SQRT_2 / 2.0 * (P.x * 1.7 - P.y);
-    float y = SQRT_2 / 2.0 * (P.x * 1.7 + P.y);
-    float r1 = max(abs(x), abs(y)) - v_size / 1.6;
-    float r2 = P.y;
-    return max(r1 / SQRT_2, r2);  // Intersect diamond with rectangle
+  P.y *= -1.0;
+  P.y -= size * 0.3;
+  float x = SQRT_2 / 2.0 * (P.x * 1.7 - P.y);
+  float y = SQRT_2 / 2.0 * (P.x * 1.7 + P.y);
+  float r1 = max(abs(x), abs(y)) - v_size / 1.6;
+  float r2 = P.y;
+  return max(r1 / SQRT_2, r2);  // Intersect diamond with rectangle
+  `)
+  }
+}
+
+class TriangleDotProgram extends MarkerProgram {
+  distance(): string {
+    return distance(`
+  P.y *= -1.0;
+  float tPy = P.y - size * 0.3;
+  float x = SQRT_2 / 2.0 * (P.x * 1.7 - tPy);
+  float y = SQRT_2 / 2.0 * (P.x * 1.7 + tPy);
+  float r1 = max(abs(x), abs(y)) - v_size / 1.6;
+  float r2 = tPy;
+  float triangle = max(r1 / SQRT_2, r2);  // Intersect diamond with rectangle
+  float v = length(P) - size/8.0;
+  float dot = max(-step(0.0, v), v);
+  return triangle * step(0.0, v);
     `)
   }
 }
@@ -351,6 +416,18 @@ class HexProgram extends MarkerProgram {
     return distance(`
   vec2 q = abs(P);
   return max(q.y * 0.57735 + q.x - 1.0 * size/2.0, q.y - 0.866 * size/2.0);
+  `)
+  }
+}
+
+class HexDotProgram extends MarkerProgram {
+  distance(): string {
+    return distance(`
+  vec2 q = abs(P);
+  float hex = max(q.y * 0.57735 + q.x - 1.0 * size/2.0, q.y - 0.866 * size/2.0);
+  float v = length(P) - size/8.0;
+  float dot = max(-step(0.0, v), v);
+  return hex * step(0.0, v);
   `)
   }
 }
@@ -512,7 +589,7 @@ class AsteriskProgram extends MarkerProgram {
   }
 }
 
-const program = new CircleYProgram(glyph, source)
+const program = new TriangleDotProgram(glyph, source)
 
 const command = program.generate()
 
