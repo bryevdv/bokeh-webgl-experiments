@@ -43,13 +43,13 @@ const glyph = {
   size: {field: "size"},
   // size: {value: 30},
   angle: {value: 0},
-  //angle: {field: "angle"},
+  // angle: {field: "angle"},
   fill_color: {field: "fill_color"},
   fill_alpha: {value: 0.3},
   //line_color: {value: [0.0, 0.0, 0.0]},
   line_color: {field: "fill_color"},
   line_alpha: {value: 1.0},
-  line_width: {value: 16.0},
+  line_width: {value: 6.0},
   //line_width: {field: "line_width"},
 }
 
@@ -105,10 +105,10 @@ function varying_assignments(marker: any): string {
   let result = ""
   for (let prop of MARKER_PROPERTIES) {
     if (marker[prop].field !== undefined) {
-      result += `v_${prop} = a_${prop};\n`
+      result += `  v_${prop} = a_${prop};\n`
     }
     else {
-      result += `v_${prop} = u_${prop};\n`
+      result += `  v_${prop} = u_${prop};\n`
     }
   }
   return result
@@ -161,89 +161,86 @@ abstract class MarkerProgram {
 
   vert_shader(marker: any): string {
     return `
-    precision mediump float;
-    attribute vec2 position;
+precision mediump float;
+attribute vec2 position;
 
-    ${attr_declarations(marker)}
-    ${uniform_declarations(marker)}
-    ${varying_declarations(marker)}
+${attr_declarations(marker)}
+${uniform_declarations(marker)}
+${varying_declarations(marker)}
 
-    void main() {
-      gl_PointSize = ${vn(marker, "size")};
-      gl_Position = vec4(position.x + ${vn(marker, "x")}, position.y + ${vn(marker, "y")}, 0, 1);
+void main() {
+  gl_PointSize = ${vn(marker, "size")};
+  gl_Position = vec4(position.x + ${vn(marker, "x")}, position.y + ${vn(marker, "y")}, 0, 1);
 
-      ${varying_assignments(marker)}
-    }
-    `
+${varying_assignments(marker)}
+}
+`
   }
 
   frag_shader(marker: any): string {
     return `
-    precision mediump float;
+precision mediump float;
 
-    const float SQRT_2 = 1.4142135623730951;
-    const float PI = 3.14159265358979323846264;
+const float SQRT_2 = 1.4142135623730951;
+const float SQRT_3 = 1.7320508075688772;
+const float PI = 3.14159265358979323846264;
 
-    ${uniform_declarations(marker)}
-    ${varying_declarations(marker)}
+${uniform_declarations(marker)}
+${varying_declarations(marker)}
 
-    vec4 outline(float distance, float antialias, vec4 fill_color, vec4 line_color, float line_width) {
-      vec4 frag_color;
+vec4 outline(float distance, float antialias, vec4 fill_color, vec4 line_color, float line_width) {
+  vec4 frag_color;
 
-      float t = line_width/2.0 - antialias;
-      float signed_distance = distance;
-      float border_distance = abs(signed_distance) - t;
-      float alpha = border_distance/antialias;
-      alpha = exp(-alpha*alpha);
+  float t = line_width/2.0 - antialias;
+  float signed_distance = distance;
+  float border_distance = abs(signed_distance) - t;
+  float alpha = border_distance/antialias;
+  alpha = exp(-alpha*alpha);
 
-      // If line alpha is zero, it means no outline. To avoid a dark outline shining
-      // through due to AA, we set the line color to the fill color and avoid branching.
-      float select = float(bool(line_color.a));
-      line_color.rgb = select * line_color.rgb + (1.0  - select) * fill_color.rgb;
+  // If line alpha is zero, it means no outline. To avoid a dark outline shining
+  // through due to AA, we set the line color to the fill color and avoid branching.
+  float select = float(bool(line_color.a));
+  line_color.rgb = select * line_color.rgb + (1.0  - select) * fill_color.rgb;
 
-      // Similarly, if we want a transparent fill
-      select = float(bool(fill_color.a));
-      fill_color.rgb = select * fill_color.rgb + (1.0  - select) * line_color.rgb;
+  // Similarly, if we want a transparent fill
+  select = float(bool(fill_color.a));
+  fill_color.rgb = select * fill_color.rgb + (1.0  - select) * line_color.rgb;
 
-      if (border_distance < 0.0)
-          frag_color = line_color;
-      else if (signed_distance < 0.0) {
-          frag_color = mix(fill_color, line_color, sqrt(alpha));
+  if (border_distance < 0.0)
+      frag_color = line_color;
+  else if (signed_distance < 0.0) {
+      frag_color = mix(fill_color, line_color, sqrt(alpha));
+  } else {
+      if (abs(signed_distance) < (line_width/2.0 + antialias) ) {
+          frag_color = vec4(line_color.rgb, line_color.a * alpha);
       } else {
-          if (abs(signed_distance) < (line_width/2.0 + antialias) ) {
-              frag_color = vec4(line_color.rgb, line_color.a * alpha);
-          } else {
-            frag_color = vec4(line_color.rgb, 0.0);
-          }
+        frag_color = vec4(line_color.rgb, 0.0);
       }
-
-      return frag_color;
-    }
-
-    ${this.main()}
-    `
   }
 
-  main(): string {
-    return `
-    void main () {
-      vec4 fill_color = vec4(v_fill_color, v_fill_alpha);
-      vec4 line_color = vec4(v_line_color, v_line_alpha);
+  return frag_color;
+}
 
-      vec2 P = 2.0 * gl_PointCoord - 1.0;
-      P = vec2(
-         cos(v_angle) * P.x + sin(v_angle) * P.y,
-        -sin(v_angle) * P.x + cos(v_angle) * P.y
-      );
+${this.distance()}
 
-      float point_size = v_size + 2.0 * (v_line_width + 1.5);
-      P *= point_size;
+void main () {
+  vec4 fill_color = vec4(v_fill_color, v_fill_alpha);
+  vec4 line_color = vec4(v_line_color, v_line_alpha);
 
-      ${this.distance()}
+  vec2 P = 2.0 * gl_PointCoord - 1.0;
+  P = vec2(
+      cos(v_angle) * P.x + sin(v_angle) * P.y,
+    -sin(v_angle) * P.x + cos(v_angle) * P.y
+  );
 
-      gl_FragColor = outline(distance, 0.8, fill_color, line_color, v_line_width);
-    }
-    `
+  float point_size = v_size + 2.0 * (v_line_width + 1.5);
+  P *= point_size;
+  P.y *= -1.0;
+
+  float dist = distance(P, v_size);
+
+  gl_FragColor = outline(dist, 0.8, fill_color, line_color, v_line_width);
+}`
   }
 
   public generate(): Regl.DrawCommand {
@@ -269,54 +266,253 @@ abstract class MarkerProgram {
 
 }
 
+function distance(code: string): string {
+  return `
+float distance(vec2 P, float size) {
+  ${code.trim()}
+}
+`
+}
+
 class CircleProgram extends MarkerProgram {
   distance(): string {
-    return `float distance = length(P) - v_size/2.0;`
+    return distance(`
+  return length(P) - size/2.0;
+  `)
   }
 }
 
 class SquareProgram extends MarkerProgram {
   distance(): string {
-    return `float distance = max(abs(P.x), abs(P.y)) - v_size/2.0;`
+    return distance(`
+  return max(abs(P.x), abs(P.y)) - v_size/2.0;
+    `)
   }
 }
 
 class DiamondProgram extends MarkerProgram {
   distance(): string {
-    return `
-    float x = SQRT_2 / 2.0 * (P.x * 1.5 - P.y);
-    float y = SQRT_2 / 2.0 * (P.x * 1.5 + P.y);
-    float r1 = max(abs(x), abs(y)) - v_size / (2.0 * SQRT_2);
-    float distance = r1 / SQRT_2;
-    `
+    return distance(`
+  float x = SQRT_2 / 2.0 * (P.x * 1.5 - P.y);
+  float y = SQRT_2 / 2.0 * (P.x * 1.5 + P.y);
+  float r1 = max(abs(x), abs(y)) - v_size / (2.0 * SQRT_2);
+  return r1 / SQRT_2;
+  `)
   }
 }
 
 class TriangleProgram extends MarkerProgram {
   distance(): string {
-    return `
+    return distance(`
     P.y -= size * 0.3;
     float x = SQRT_2 / 2.0 * (P.x * 1.7 - P.y);
     float y = SQRT_2 / 2.0 * (P.x * 1.7 + P.y);
     float r1 = max(abs(x), abs(y)) - v_size / 1.6;
     float r2 = P.y;
-    float distance = max(r1 / SQRT_2, r2);  // Intersect diamond with rectangle
-    `
+    return max(r1 / SQRT_2, r2);  // Intersect diamond with rectangle
+    `)
   }
 }
 
 class XProgram extends MarkerProgram {
   distance(): string {
-    return `
-    float circle = length(P) - v_size / 1.6;
+    return distance(`
+    float circle = length(P) - v_size / 2.0;
     float X = min(abs(P.x - P.y), abs(P.x + P.y)) - v_size / 100.0;  // bit of "width" for aa
-    float distance = max(circle, X);
-    `
+    return max(circle, X);
+    `)
   }
 }
 
+class YProgram extends MarkerProgram {
+  distance(): string {
+    return distance(`
+    float circle = length(P) - v_size / 2.0;
+    float bottom = step(0.0, -P.y) * (abs(P.x) - v_size / 100.0);
+    float top = step(0.0, P.y) * (min(abs(P.x - SQRT_3*P.y), abs(P.x + SQRT_3*P.y)) - v_size / 40.0);
+    return max(circle, bottom+top);
+    `)
+  }
+}
 
-const program = new CircleProgram(glyph, source)
+class CircleYProgram extends MarkerProgram {
+  distance(): string {
+    return distance(`
+    float circle = length(P) - v_size / 2.0;
+    float bottom = -step(0.0, -P.y) * (abs(P.x) - v_size / 100.0);
+    float top = -step(0.0, P.y) * (min(abs(P.x - SQRT_3*P.y), abs(P.x + SQRT_3*P.y)) - v_size / 40.0);
+    return min(max(circle, bottom),  max(circle, top));
+    `)
+  }
+}
+
+class HexProgram extends MarkerProgram {
+  distance(): string {
+    return distance(`
+  vec2 q = abs(P);
+  return max(q.y * 0.57735 + q.x - 1.0 * size/2.0, q.y - 0.866 * size/2.0);
+  `)
+  }
+}
+
+class PlusProgram extends MarkerProgram {
+  distance(): string {
+    return distance(`
+  float square = max(abs(P.x), abs(P.y)) - size / 2.0;   // 2.5 is a tweak?
+  float cross = min(abs(P.x), abs(P.y)) - 3.0 * size / 16.0;
+  return max(square, cross);
+  `)
+  }
+}
+
+class CrossProgram extends MarkerProgram {
+  distance(): string {
+    return distance(`
+  float square = max(abs(P.x), abs(P.y)) - size / 2.0;   // 2.5 is a tweak?
+  float cross = min(abs(P.x), abs(P.y)) - size / 100.0;  // bit of "width" for aa
+  return max(square, cross);
+  `)
+  }
+}
+
+class DashProgram extends MarkerProgram {
+  distance(): string {
+    return distance(`
+  float square = max(abs(P.x), abs(P.y)) - size / 2.0;   // 2.5 is a tweak?
+  float cross = abs(P.y) - size / 100.0;  // bit of "width" for aa
+  return max(square, cross);
+  `)
+  }
+}
+
+class CircleCrossProgram extends MarkerProgram {
+  distance(): string {
+    return distance(`
+  // Define quadrants
+  float qs = size / 2.0;  // quadrant size
+  float s1 = max(abs(P.x - qs), abs(P.y - qs)) - qs;
+  float s2 = max(abs(P.x + qs), abs(P.y - qs)) - qs;
+  float s3 = max(abs(P.x - qs), abs(P.y + qs)) - qs;
+  float s4 = max(abs(P.x + qs), abs(P.y + qs)) - qs;
+  // Intersect main shape with quadrants (to form cross)
+  float circle = length(P) - size/2.0;
+  float c1 = max(circle, s1);
+  float c2 = max(circle, s2);
+  float c3 = max(circle, s3);
+  float c4 = max(circle, s4);
+  // Union
+  return min(min(min(c1, c2), c3), c4);
+  `)
+  }
+}
+
+class SquareCrossProgram extends MarkerProgram {
+  distance(): string {
+    return distance(`
+  // Define quadrants
+  float qs = size / 2.0;  // quadrant size
+  float s1 = max(abs(P.x - qs), abs(P.y - qs)) - qs;
+  float s2 = max(abs(P.x + qs), abs(P.y - qs)) - qs;
+  float s3 = max(abs(P.x - qs), abs(P.y + qs)) - qs;
+  float s4 = max(abs(P.x + qs), abs(P.y + qs)) - qs;
+  // Intersect main shape with quadrants (to form cross)
+  float square = max(abs(P.x), abs(P.y)) - size/2.0;
+  float c1 = max(square, s1);
+  float c2 = max(square, s2);
+  float c3 = max(square, s3);
+  float c4 = max(square, s4);
+  // Union
+  return min(min(min(c1, c2), c3), c4);
+  `)
+  }
+}
+
+class DiamondCrossProgram extends MarkerProgram {
+  distance(): string {
+    return distance(`
+  // Define quadrants
+  float qs = size / 2.0;  // quadrant size
+  float s1 = max(abs(P.x - qs), abs(P.y - qs)) - qs;
+  float s2 = max(abs(P.x + qs), abs(P.y - qs)) - qs;
+  float s3 = max(abs(P.x - qs), abs(P.y + qs)) - qs;
+  float s4 = max(abs(P.x + qs), abs(P.y + qs)) - qs;
+  // Intersect main shape with quadrants (to form cross)
+  float x = SQRT_2 / 2.0 * (P.x * 1.5 - P.y);
+  float y = SQRT_2 / 2.0 * (P.x * 1.5 + P.y);
+  float diamond = max(abs(x), abs(y)) - size / (2.0 * SQRT_2);
+  diamond /= SQRT_2;
+  float c1 = max(diamond, s1);
+  float c2 = max(diamond, s2);
+  float c3 = max(diamond, s3);
+  float c4 = max(diamond, s4);
+  // Union
+  return min(min(min(c1, c2), c3), c4);
+  `)
+  }
+}
+
+class CircleXProgram extends MarkerProgram {
+  distance(): string {
+    return distance(`
+  float x = P.x - P.y;
+  float y = P.x + P.y;
+  // Define quadrants
+  float qs = size / 2.0;  // quadrant size
+  float s1 = max(abs(x - qs), abs(y - qs)) - qs;
+  float s2 = max(abs(x + qs), abs(y - qs)) - qs;
+  float s3 = max(abs(x - qs), abs(y + qs)) - qs;
+  float s4 = max(abs(x + qs), abs(y + qs)) - qs;
+  // Intersect main shape with quadrants (to form cross)
+  float circle = length(P) - size/2.0;
+  float c1 = max(circle, s1);
+  float c2 = max(circle, s2);
+  float c3 = max(circle, s3);
+  float c4 = max(circle, s4);
+  // Union
+  return min(min(min(c1, c2), c3), c4);
+  `)
+  }
+}
+
+class SquareXProgram extends MarkerProgram {
+  distance(): string {
+    return distance(`
+  float x = P.x - P.y;
+  float y = P.x + P.y;
+  // Define quadrants
+  float qs = size / 2.0;  // quadrant size
+  float s1 = max(abs(x - qs), abs(y - qs)) - qs;
+  float s2 = max(abs(x + qs), abs(y - qs)) - qs;
+  float s3 = max(abs(x - qs), abs(y + qs)) - qs;
+  float s4 = max(abs(x + qs), abs(y + qs)) - qs;
+  // Intersect main shape with quadrants (to form cross)
+  float square = max(abs(P.x), abs(P.y)) - size/2.0;
+  float c1 = max(square, s1);
+  float c2 = max(square, s2);
+  float c3 = max(square, s3);
+  float c4 = max(square, s4);
+  // Union
+  return min(min(min(c1, c2), c3), c4);
+  `)
+  }
+}
+
+class AsteriskProgram extends MarkerProgram {
+  distance(): string {
+    return distance(`
+  // Masks
+  float diamond = max(abs(SQRT_2 / 2.0 * (P.x - P.y)), abs(SQRT_2 / 2.0 * (P.x + P.y))) - size / (2.0 * SQRT_2);
+  float square = max(abs(P.x), abs(P.y)) - size / (2.0 * SQRT_2);
+  // Shapes
+  float X = min(abs(P.x - P.y), abs(P.x + P.y)) - size / 100.0;  // bit of "width" for aa
+  float cross = min(abs(P.x), abs(P.y)) - size / 100.0;  // bit of "width" for aa
+  // Result is union of masked shapes
+  return min(max(X, diamond), max(cross, square));
+  `)
+  }
+}
+
+const program = new CircleYProgram(glyph, source)
 
 const command = program.generate()
 
